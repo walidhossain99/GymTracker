@@ -70,21 +70,19 @@ export async function ensureStarterData(supabase: SupabaseClient, userId: string
 
     if (routineError || !insertedRoutine) throw routineError ?? new Error('Could not create starter routine')
 
-    const rows = routine.exercises
-      .map((name, position) => {
-        const exercise = byName.get(name)
-        if (!exercise) return null
-        return {
-          user_id: userId,
-          routine_id: insertedRoutine.id,
-          exercise_id: exercise.id,
-          position,
-          target_sets: 3,
-          rep_min: exercise.rep_min,
-          rep_max: exercise.rep_max,
-        }
-      })
-      .filter(Boolean)
+    const rows = routine.exercises.flatMap((name, position) => {
+      const exercise = byName.get(name)
+      if (!exercise) return []
+      return [{
+        user_id: userId,
+        routine_id: insertedRoutine.id,
+        exercise_id: exercise.id,
+        position,
+        target_sets: 3,
+        rep_min: exercise.rep_min,
+        rep_max: exercise.rep_max,
+      }]
+    })
 
     if (rows.length) await supabase.from('routine_exercises').insert(rows)
   }
