@@ -1,6 +1,6 @@
 # Progress Forge
 
-A PERSONAL cloud-synced gym progression tracker built with Next.js 16, React 19, Supabase and Recharts.
+A cloud-synced gym progression tracker built with Next.js 16, React 19, Supabase and Recharts.
 
 ## Included
 
