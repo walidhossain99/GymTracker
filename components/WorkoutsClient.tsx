@@ -4,7 +4,7 @@ import { FormEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, u
 import { createClient } from '@/lib/supabase/client'
 import { getCurrentUser } from '@/lib/user'
 import { ensureStarterData } from '@/lib/seed'
-import type { Exercise, ExerciseLog, Routine, RoutineExercise, WorkoutSession } from '@/lib/types'
+import type { Exercise, ExerciseLog, ExerciseSet, Routine, RoutineExercise, WorkoutSession } from '@/lib/types'
 import { formatDate, formatKg, progressionRecommendation, todayLocalISO } from '@/lib/metrics'
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh'
 
@@ -294,9 +294,31 @@ export function WorkoutsClient() {
     else load()
   }
 
+  async function updateSet(id: string, weight: number, reps: number) {
+    if (!userId) return
+    if (!Number.isFinite(weight) || weight < 0 || !Number.isInteger(reps) || reps < 1 || reps > 200) {
+      setMessage('Enter a valid weight and rep count.')
+      return
+    }
+
+    const { error } = await supabase
+      .from('exercise_sets')
+      .update({ weight_kg: weight, reps })
+      .eq('id', id)
+      .eq('user_id', userId)
+
+    if (error) setMessage(error.message)
+    else {
+      setMessage('Set corrected and saved.')
+      await load()
+    }
+  }
+
   async function deleteSet(id: string) {
-    await supabase.from('exercise_sets').delete().eq('id', id)
-    load()
+    if (!userId) return
+    const { error } = await supabase.from('exercise_sets').delete().eq('id', id).eq('user_id', userId)
+    if (error) setMessage(error.message)
+    else await load()
   }
 
   async function finishWorkout() {
@@ -336,6 +358,7 @@ export function WorkoutsClient() {
           routine={activeRoutine}
           previous={previous}
           onSaveSet={saveSet}
+          onUpdateSet={updateSet}
           onDeleteSet={deleteSet}
           onUpdateDate={updateActiveWorkoutDate}
           onFinish={finishWorkout}
@@ -582,11 +605,12 @@ function RoutineEditForm({ routine, exercises, onSave, onCancel, busy }: {
   )
 }
 
-function ActiveWorkout({ session, routine, previous, onSaveSet, onDeleteSet, onUpdateDate, onFinish, onDiscard, busy }: {
+function ActiveWorkout({ session, routine, previous, onSaveSet, onUpdateSet, onDeleteSet, onUpdateDate, onFinish, onDiscard, busy }: {
   session: ActiveSession
   routine: Routine | null
   previous: PreviousMap
   onSaveSet: (log: ExerciseLog, weight: number, reps: number) => Promise<void>
+  onUpdateSet: (id: string, weight: number, reps: number) => Promise<void>
   onDeleteSet: (id: string) => Promise<void>
   onUpdateDate: (date: string) => Promise<void>
   onFinish: () => Promise<void>
@@ -616,17 +640,18 @@ function ActiveWorkout({ session, routine, previous, onSaveSet, onDeleteSet, onU
 
       {session.exercise_logs.map((log) => {
         const target = routine?.routine_exercises?.find((item) => item.exercise_id === log.exercise_id)
-        return <WorkoutExercise key={log.id} log={log} target={target} previous={previous[log.exercise_id]} onSave={onSaveSet} onDelete={onDeleteSet} />
+        return <WorkoutExercise key={log.id} log={log} target={target} previous={previous[log.exercise_id]} onSave={onSaveSet} onUpdate={onUpdateSet} onDelete={onDeleteSet} />
       })}
     </section>
   )
 }
 
-function WorkoutExercise({ log, target, previous, onSave, onDelete }: {
+function WorkoutExercise({ log, target, previous, onSave, onUpdate, onDelete }: {
   log: ExerciseLog
   target?: RoutineExercise
   previous?: ExerciseLog
   onSave: (log: ExerciseLog, weight: number, reps: number) => Promise<void>
+  onUpdate: (id: string, weight: number, reps: number) => Promise<void>
   onDelete: (id: string) => Promise<void>
 }) {
   const exercise = log.exercises as unknown as { name: string; rep_min: number; rep_max: number; increment_kg: number } | null
@@ -671,7 +696,13 @@ function WorkoutExercise({ log, target, previous, onSave, onDelete }: {
         {previous && <div className="muted" style={{fontSize:12,marginTop:5}}>{progressionRecommendation(progressionSettings, previous)}</div>}
       </div>
 
-      {!!log.exercise_sets?.length && <div className="stack" style={{gap:7}}>{log.exercise_sets.map((set) => <div key={set.id} className="card-soft row-between"><div><strong>Set {set.set_number}</strong> · {formatKg(Number(set.weight_kg))} × {set.reps}</div><button className="btn btn-danger" onClick={() => onDelete(set.id)}>Delete</button></div>)}</div>}
+      {!!log.exercise_sets?.length && (
+        <div className="stack" style={{gap:7}}>
+          {log.exercise_sets.map((set) => (
+            <EditableWorkoutSet key={set.id} set={set} onUpdate={onUpdate} onDelete={onDelete} />
+          ))}
+        </div>
+      )}
 
       <form className="set-row" onSubmit={submit}>
         <strong>#{(log.exercise_sets?.length ?? 0) + 1}</strong>
@@ -682,3 +713,85 @@ function WorkoutExercise({ log, target, previous, onSave, onDelete }: {
     </div>
   )
 }
+
+function EditableWorkoutSet({ set, onUpdate, onDelete }: {
+  set: ExerciseSet
+  onUpdate: (id: string, weight: number, reps: number) => Promise<void>
+  onDelete: (id: string) => Promise<void>
+}) {
+  const [editing, setEditing] = useState(false)
+  const [weight, setWeight] = useState(String(Number(set.weight_kg)))
+  const [reps, setReps] = useState(String(set.reps))
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (!editing) {
+      setWeight(String(Number(set.weight_kg)))
+      setReps(String(set.reps))
+    }
+  }, [set.weight_kg, set.reps, editing])
+
+  function cancel() {
+    setWeight(String(Number(set.weight_kg)))
+    setReps(String(set.reps))
+    setEditing(false)
+  }
+
+  async function save() {
+    const w = Number(weight)
+    const r = Number(reps)
+    if (!Number.isFinite(w) || w < 0 || !Number.isInteger(r) || r < 1 || r > 200) return
+    setSaving(true)
+    await onUpdate(set.id, w, r)
+    setSaving(false)
+    setEditing(false)
+  }
+
+  if (!editing) {
+    return (
+      <div className="card-soft row-between saved-set-row">
+        <div><strong>Set {set.set_number}</strong> · {formatKg(Number(set.weight_kg))} × {set.reps}</div>
+        <div className="row saved-set-actions">
+          <button type="button" className="btn" onClick={() => setEditing(true)}>Edit</button>
+          <button type="button" className="btn btn-danger" onClick={() => onDelete(set.id)}>Delete</button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="card-soft saved-set-edit">
+      <strong>Set {set.set_number}</strong>
+      <label>
+        Weight kg
+        <input
+          autoFocus
+          type="number"
+          min="0"
+          step="0.01"
+          inputMode="decimal"
+          value={weight}
+          onChange={(e) => setWeight(e.target.value)}
+        />
+      </label>
+      <label>
+        Reps
+        <input
+          type="number"
+          min="1"
+          max="200"
+          step="1"
+          inputMode="numeric"
+          value={reps}
+          onChange={(e) => setReps(e.target.value)}
+        />
+      </label>
+      <div className="row saved-set-actions">
+        <button type="button" className="btn btn-primary" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save'}</button>
+        <button type="button" className="btn" disabled={saving} onClick={cancel}>Cancel</button>
+        <button type="button" className="btn btn-danger" disabled={saving} onClick={() => onDelete(set.id)}>Delete</button>
+      </div>
+    </div>
+  )
+}
+

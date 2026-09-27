@@ -147,3 +147,38 @@ th { color: var(--muted); font-weight: 700; }
   .routine-sort-title { align-items:flex-start; }
   .drag-handle { width:40px; min-width:40px; }
 }
+
+/* v1.3 — saved workout sets can be corrected in place */
+.saved-set-actions {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.saved-set-edit {
+  display: grid;
+  grid-template-columns: auto minmax(140px, 1fr) minmax(110px, .7fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+.saved-set-edit > strong {
+  align-self: center;
+  white-space: nowrap;
+}
+@media (max-width: 720px) {
+  .saved-set-row {
+    align-items: flex-start;
+    gap: 12px;
+  }
+  .saved-set-edit {
+    grid-template-columns: 1fr 1fr;
+  }
+  .saved-set-edit > strong,
+  .saved-set-edit .saved-set-actions {
+    grid-column: 1 / -1;
+  }
+  .saved-set-edit .saved-set-actions {
+    justify-content: stretch;
+  }
+  .saved-set-edit .saved-set-actions .btn {
+    flex: 1 1 auto;
+  }
+}
