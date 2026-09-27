@@ -92,7 +92,7 @@ export function BodyweightClient() {
       <section className="grid grid-4">
         <StatCard label="Current" value={latest ? formatKg(Number(latest.weight_kg)) : '—'} />
         <StatCard label="7-entry average" value={avg7 === null ? '—' : formatKg(avg7)} />
-        <StatCard label="Total change" value={change === null ? '—' : `${change >= 0 ? '+' : ''}${change.toFixed(1)} kg`} />
+        <StatCard label="Total change" value={change === null ? '—' : `${change >= 0 ? '+' : ''}${formatKg(change)}`} />
         <StatCard label="Average rate" value={weeklyRate === null ? '—' : `${weeklyRate >= 0 ? '+' : ''}${weeklyRate.toFixed(2)} kg/wk`} />
       </section>
 
@@ -100,8 +100,8 @@ export function BodyweightClient() {
         <form className="card stack" onSubmit={save}>
           <div><h2 className="h2">Log weigh-in</h2><div className="muted">For cleaner trends, weigh under similar conditions.</div></div>
           <label>Date<input required type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
-          <label>Weight (kg)<input required type="number" min="20.01" max="399.99" step="0.1" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="78.4" /></label>
-          <label>Body fat % · optional<input type="number" min="1.01" max="69.99" step="0.1" value={bodyFat} onChange={(e) => setBodyFat(e.target.value)} placeholder="18.5" /></label>
+          <label>Weight (kg)<input required type="number" min="20.01" max="399.99" step="0.01" inputMode="decimal" value={weight} onChange={(e) => setWeight(e.target.value)} placeholder="78.4" /></label>
+          <label>Body fat % · optional<input type="number" min="1.01" max="69.99" step="0.01" inputMode="decimal" value={bodyFat} onChange={(e) => setBodyFat(e.target.value)} placeholder="18.5" /></label>
           <label>Note · optional<input maxLength={200} value={note} onChange={(e) => setNote(e.target.value)} placeholder="Morning, fasted…" /></label>
           <button className="btn btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save weigh-in'}</button>
           {message && <div className="muted" style={{ fontSize: 13 }}>{message}</div>}
@@ -127,8 +127,8 @@ export function BodyweightClient() {
                   <tr key={entry.id}>
                     <td>{formatDate(entry.entry_date)}</td>
                     <td><strong>{formatKg(Number(entry.weight_kg))}</strong></td>
-                    <td>{delta === null ? '—' : `${delta >= 0 ? '+' : ''}${delta.toFixed(1)} kg`}</td>
-                    <td>{entry.body_fat_pct ? `${Number(entry.body_fat_pct).toFixed(1)}%` : '—'}</td>
+                    <td>{delta === null ? '—' : `${delta >= 0 ? '+' : ''}${formatKg(delta)}`}</td>
+                    <td>{entry.body_fat_pct ? `${Number(entry.body_fat_pct).toLocaleString(undefined, { maximumFractionDigits: 2 })}%` : '—'}</td>
                     <td className="muted">{entry.note || '—'}</td>
                     <td><button className="btn btn-danger" onClick={() => remove(entry.id)}>Delete</button></td>
                   </tr>

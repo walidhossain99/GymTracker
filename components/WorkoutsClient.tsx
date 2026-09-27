@@ -4,12 +4,13 @@ import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { getCurrentUser } from '@/lib/user'
 import { ensureStarterData } from '@/lib/seed'
-import type { Exercise, ExerciseLog, Routine, WorkoutSession } from '@/lib/types'
+import type { Exercise, ExerciseLog, Routine, RoutineExercise, WorkoutSession } from '@/lib/types'
 import { formatDate, formatKg, progressionRecommendation, todayLocalISO } from '@/lib/metrics'
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh'
 
 type ActiveSession = WorkoutSession & { exercise_logs: ExerciseLog[] }
 type PreviousMap = Record<string, ExerciseLog | undefined>
+type RoutineDraftItem = { exercise_id: string; target_sets: number; rep_min: number; rep_max: number }
 
 export function WorkoutsClient() {
   const supabase = useMemo(() => createClient(), [])
@@ -19,6 +20,7 @@ export function WorkoutsClient() {
   const [active, setActive] = useState<ActiveSession | null>(null)
   const [history, setHistory] = useState<WorkoutSession[]>([])
   const [previous, setPrevious] = useState<PreviousMap>({})
+  const [editingRoutineId, setEditingRoutineId] = useState<string | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
 
@@ -103,11 +105,12 @@ export function WorkoutsClient() {
   }
 
   useEffect(() => { load() }, [load])
-  useRealtimeRefresh(userId, ['routines', 'routine_exercises', 'workout_sessions', 'exercise_logs', 'exercise_sets'], load)
+  useRealtimeRefresh(userId, ['exercises', 'routines', 'routine_exercises', 'workout_sessions', 'exercise_logs', 'exercise_sets'], load)
 
   async function createRoutine(name: string, exerciseIds: string[]) {
     if (!userId || !name.trim() || !exerciseIds.length) return
     setBusy(true)
+    setMessage('')
     const { data: routine, error } = await supabase.from('routines').insert({
       user_id: userId,
       name: name.trim(),
@@ -131,16 +134,87 @@ export function WorkoutsClient() {
     setBusy(false)
     if (itemError) setMessage(itemError.message)
     else {
-      setMessage('Custom routine created.')
+      setMessage('Custom routine created. Use Edit routine to fine-tune sets, reps and exercise order.')
       load()
     }
+  }
+
+  async function updateRoutine(routine: Routine, name: string, description: string, items: RoutineDraftItem[]) {
+    if (!userId || !name.trim() || !items.length) return
+    setBusy(true)
+    setMessage('')
+
+    const { error: routineError } = await supabase.from('routines').update({
+      name: name.trim(),
+      description: description.trim() || null,
+    }).eq('id', routine.id).eq('user_id', userId)
+
+    if (routineError) {
+      setBusy(false)
+      setMessage(routineError.message)
+      return
+    }
+
+    const existing = routine.routine_exercises ?? []
+    const incomingIds = new Set(items.map((item) => item.exercise_id))
+    const removedIds = existing.filter((item) => !incomingIds.has(item.exercise_id)).map((item) => item.id)
+
+    if (removedIds.length) {
+      const { error } = await supabase.from('routine_exercises').delete().in('id', removedIds).eq('user_id', userId)
+      if (error) {
+        setBusy(false)
+        setMessage(error.message)
+        return
+      }
+    }
+
+    for (let position = 0; position < items.length; position += 1) {
+      const item = items[position]
+      const old = existing.find((entry) => entry.exercise_id === item.exercise_id)
+      if (old) {
+        const { error } = await supabase.from('routine_exercises').update({
+          position,
+          target_sets: item.target_sets,
+          rep_min: item.rep_min,
+          rep_max: item.rep_max,
+        }).eq('id', old.id).eq('user_id', userId)
+        if (error) {
+          setBusy(false)
+          setMessage(error.message)
+          return
+        }
+      } else {
+        const { error } = await supabase.from('routine_exercises').insert({
+          user_id: userId,
+          routine_id: routine.id,
+          exercise_id: item.exercise_id,
+          position,
+          target_sets: item.target_sets,
+          rep_min: item.rep_min,
+          rep_max: item.rep_max,
+        })
+        if (error) {
+          setBusy(false)
+          setMessage(error.message)
+          return
+        }
+      }
+    }
+
+    setBusy(false)
+    setEditingRoutineId(null)
+    setMessage(`${name.trim()} updated.`)
+    await load()
   }
 
   async function deleteRoutine(id: string, name: string) {
     if (!confirm(`Delete routine "${name}"? Exercise history will remain.`)) return
     const { error } = await supabase.from('routines').delete().eq('id', id)
     if (error) setMessage(error.message)
-    else load()
+    else {
+      if (editingRoutineId === id) setEditingRoutineId(null)
+      load()
+    }
   }
 
   async function startRoutine(routine: Routine) {
@@ -210,28 +284,37 @@ export function WorkoutsClient() {
     load()
   }
 
+  const activeRoutine = active?.routine_id ? routines.find((routine) => routine.id === active.routine_id) ?? null : null
+
   return (
     <div className="container stack">
       <header className="page-head">
         <div className="eyebrow">Gym mode</div>
         <h1 className="h1">Workouts</h1>
-        <p>Start a routine, log sets as you train, and resume the same active session from another device. Saved sets go to Supabase immediately.</p>
+        <p>Build each training day exactly how you want it, then log sets as you train and resume the same active session from another device.</p>
       </header>
 
       {message && <div className="notice">{message}</div>}
 
       {active ? (
-        <ActiveWorkout session={active} previous={previous} onSaveSet={saveSet} onDeleteSet={deleteSet} onFinish={finishWorkout} onDiscard={discardWorkout} busy={busy} />
+        <ActiveWorkout session={active} routine={activeRoutine} previous={previous} onSaveSet={saveSet} onDeleteSet={deleteSet} onFinish={finishWorkout} onDiscard={discardWorkout} busy={busy} />
       ) : (
         <>
           <section className="stack">
-            <div className="row-between"><div><h2 className="h2">Choose a routine</h2><div className="muted">Your starter plan can be expanded later by adding exercises and routines in the database/UI.</div></div><span className="badge"><span className="live-dot" />Ready</span></div>
+            <div className="row-between"><div><h2 className="h2">Choose a routine</h2><div className="muted">Every workout day is editable. Add or remove exercises, change order, sets and rep ranges whenever your plan changes.</div></div><span className="badge"><span className="live-dot" />Ready</span></div>
             <div className="routine-grid">
               {routines.map((routine) => (
                 <div className="card stack" key={routine.id}>
-                  <div className="row-between"><div><div className="eyebrow">{routine.routine_exercises?.length ?? 0} exercises</div><h2 className="h2" style={{marginTop:6}}>{routine.name}</h2><div className="muted" style={{marginTop:6}}>{routine.description}</div></div><button className="btn btn-danger" onClick={() => deleteRoutine(routine.id, routine.name)}>Delete</button></div>
+                  <div className="row-between">
+                    <div><div className="eyebrow">{routine.routine_exercises?.length ?? 0} exercises</div><h2 className="h2" style={{marginTop:6}}>{routine.name}</h2><div className="muted" style={{marginTop:6}}>{routine.description}</div></div>
+                    <div className="row"><button className="btn" onClick={() => setEditingRoutineId(editingRoutineId === routine.id ? null : routine.id)}>{editingRoutineId === routine.id ? 'Close' : 'Edit'}</button><button className="btn btn-danger" onClick={() => deleteRoutine(routine.id, routine.name)}>Delete</button></div>
+                  </div>
                   <div className="stack" style={{gap:7}}>{routine.routine_exercises?.map((item) => <div className="card-soft" key={item.id}><strong>{item.exercises?.name}</strong><div className="muted" style={{fontSize:12,marginTop:3}}>{item.target_sets} sets · {item.rep_min}–{item.rep_max} reps</div></div>)}</div>
-                  <button className="btn btn-primary" disabled={busy} onClick={() => startRoutine(routine)}>Start {routine.name}</button>
+                  {editingRoutineId === routine.id ? (
+                    <RoutineEditForm routine={routine} exercises={exercises} onSave={updateRoutine} onCancel={() => setEditingRoutineId(null)} busy={busy} />
+                  ) : (
+                    <button className="btn btn-primary" disabled={busy} onClick={() => startRoutine(routine)}>Start {routine.name}</button>
+                  )}
                 </div>
               ))}
             </div>
@@ -271,7 +354,7 @@ function RoutineCreateForm({ exercises, onCreate, busy }: { exercises: Exercise[
 
   return (
     <form className="card stack" onSubmit={submit}>
-      <div><h2 className="h2">Create custom routine</h2><div className="muted">Choose exercises in the order you want to perform them. New routines use 3 working sets and each exercise's saved rep range.</div></div>
+      <div><h2 className="h2">Create custom routine</h2><div className="muted">Choose exercises in the order you want to perform them. You can edit the exact sets, reps and order immediately afterward.</div></div>
       <label>Routine name<input required value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Upper A" /></label>
       <div className="grid grid-3">
         {exercises.map((exercise) => (
@@ -286,8 +369,105 @@ function RoutineCreateForm({ exercises, onCreate, busy }: { exercises: Exercise[
   )
 }
 
-function ActiveWorkout({ session, previous, onSaveSet, onDeleteSet, onFinish, onDiscard, busy }: {
+function RoutineEditForm({ routine, exercises, onSave, onCancel, busy }: {
+  routine: Routine
+  exercises: Exercise[]
+  onSave: (routine: Routine, name: string, description: string, items: RoutineDraftItem[]) => Promise<void>
+  onCancel: () => void
+  busy: boolean
+}) {
+  const [name, setName] = useState(routine.name)
+  const [description, setDescription] = useState(routine.description ?? '')
+  const [items, setItems] = useState<RoutineDraftItem[]>(() => (routine.routine_exercises ?? []).map((item) => ({
+    exercise_id: item.exercise_id,
+    target_sets: item.target_sets,
+    rep_min: item.rep_min,
+    rep_max: item.rep_max,
+  })))
+  const [addId, setAddId] = useState('')
+
+  const available = exercises.filter((exercise) => !items.some((item) => item.exercise_id === exercise.id))
+
+  function patch(index: number, field: keyof Omit<RoutineDraftItem, 'exercise_id'>, value: number) {
+    setItems((current) => current.map((item, i) => i === index ? { ...item, [field]: value } : item))
+  }
+
+  function move(index: number, direction: -1 | 1) {
+    const nextIndex = index + direction
+    if (nextIndex < 0 || nextIndex >= items.length) return
+    setItems((current) => {
+      const next = [...current]
+      ;[next[index], next[nextIndex]] = [next[nextIndex], next[index]]
+      return next
+    })
+  }
+
+  function addExercise() {
+    const exercise = exercises.find((item) => item.id === addId)
+    if (!exercise) return
+    setItems((current) => [...current, { exercise_id: exercise.id, target_sets: 3, rep_min: exercise.rep_min, rep_max: exercise.rep_max }])
+    setAddId('')
+  }
+
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    if (!name.trim() || !items.length) return
+    const invalid = items.some((item) => !Number.isInteger(item.target_sets) || item.target_sets < 1 || item.target_sets > 20 || !Number.isInteger(item.rep_min) || !Number.isInteger(item.rep_max) || item.rep_min < 1 || item.rep_max < item.rep_min)
+    if (invalid) return
+    await onSave(routine, name, description, items)
+  }
+
+  return (
+    <form className="routine-editor stack" onSubmit={submit}>
+      <div className="card-soft stack">
+        <div className="row-between"><strong>Edit routine</strong><button type="button" className="btn" onClick={onCancel}>Cancel</button></div>
+        <label>Routine name<input required value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <label>Description<input value={description} onChange={(e) => setDescription(e.target.value)} placeholder="e.g. Push-focused training day" /></label>
+      </div>
+
+      <div className="stack" style={{gap:8}}>
+        {items.map((item, index) => {
+          const exercise = exercises.find((entry) => entry.id === item.exercise_id)
+          return (
+            <div className="card-soft stack" key={item.exercise_id} style={{gap:10}}>
+              <div className="row-between">
+                <div><strong>{index + 1}. {exercise?.name ?? 'Exercise'}</strong><div className="muted" style={{fontSize:11,marginTop:2}}>{exercise?.muscle_group || 'Uncategorized'}</div></div>
+                <div className="row">
+                  <button type="button" className="btn" disabled={index === 0} onClick={() => move(index, -1)}>↑</button>
+                  <button type="button" className="btn" disabled={index === items.length - 1} onClick={() => move(index, 1)}>↓</button>
+                  <button type="button" className="btn btn-danger" onClick={() => setItems((current) => current.filter((_, i) => i !== index))}>Remove</button>
+                </div>
+              </div>
+              <div className="grid grid-3">
+                <label>Working sets<input type="number" min="1" max="20" value={item.target_sets} onChange={(e) => patch(index, 'target_sets', Number(e.target.value))} /></label>
+                <label>Rep min<input type="number" min="1" max="100" value={item.rep_min} onChange={(e) => patch(index, 'rep_min', Number(e.target.value))} /></label>
+                <label>Rep max<input type="number" min="1" max="100" value={item.rep_max} onChange={(e) => patch(index, 'rep_max', Number(e.target.value))} /></label>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      <div className="card-soft stack">
+        <strong>Add exercise to this day</strong>
+        <div className="row">
+          <select value={addId} onChange={(e) => setAddId(e.target.value)}>
+            <option value="">Choose an exercise…</option>
+            {available.map((exercise) => <option key={exercise.id} value={exercise.id}>{exercise.name}</option>)}
+          </select>
+          <button type="button" className="btn" disabled={!addId} onClick={addExercise}>Add</button>
+        </div>
+        {!available.length && <div className="muted" style={{fontSize:12}}>Every exercise in your library is already in this routine.</div>}
+      </div>
+
+      <button className="btn btn-primary" disabled={busy || !items.length}>{busy ? 'Saving routine…' : 'Save routine changes'}</button>
+    </form>
+  )
+}
+
+function ActiveWorkout({ session, routine, previous, onSaveSet, onDeleteSet, onFinish, onDiscard, busy }: {
   session: ActiveSession
+  routine: Routine | null
   previous: PreviousMap
   onSaveSet: (log: ExerciseLog, weight: number, reps: number) => Promise<void>
   onDeleteSet: (id: string) => Promise<void>
@@ -302,13 +482,25 @@ function ActiveWorkout({ session, previous, onSaveSet, onDeleteSet, onFinish, on
         <div className="row"><button className="btn btn-danger" onClick={onDiscard}>Discard</button><button className="btn btn-primary" disabled={busy} onClick={onFinish}>{busy ? 'Finishing…' : 'Finish workout'}</button></div>
       </div>
 
-      {session.exercise_logs.map((log) => <WorkoutExercise key={log.id} log={log} previous={previous[log.exercise_id]} onSave={onSaveSet} onDelete={onDeleteSet} />)}
+      {session.exercise_logs.map((log) => {
+        const target = routine?.routine_exercises?.find((item) => item.exercise_id === log.exercise_id)
+        return <WorkoutExercise key={log.id} log={log} target={target} previous={previous[log.exercise_id]} onSave={onSaveSet} onDelete={onDeleteSet} />
+      })}
     </section>
   )
 }
 
-function WorkoutExercise({ log, previous, onSave, onDelete }: { log: ExerciseLog; previous?: ExerciseLog; onSave: (log: ExerciseLog, weight: number, reps: number) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
+function WorkoutExercise({ log, target, previous, onSave, onDelete }: {
+  log: ExerciseLog
+  target?: RoutineExercise
+  previous?: ExerciseLog
+  onSave: (log: ExerciseLog, weight: number, reps: number) => Promise<void>
+  onDelete: (id: string) => Promise<void>
+}) {
   const exercise = log.exercises as unknown as { name: string; rep_min: number; rep_max: number; increment_kg: number } | null
+  const repMin = target?.rep_min ?? exercise?.rep_min ?? 1
+  const repMax = target?.rep_max ?? exercise?.rep_max ?? repMin
+  const targetSets = target?.target_sets ?? 3
   const lastSets = previous?.exercise_sets ?? []
   const suggestedWeight = lastSets.length ? Number(lastSets[0].weight_kg) : 0
   const [weight, setWeight] = useState(suggestedWeight ? String(suggestedWeight) : '')
@@ -317,7 +509,7 @@ function WorkoutExercise({ log, previous, onSave, onDelete }: { log: ExerciseLog
 
   useEffect(() => {
     if (!weight && suggestedWeight) setWeight(String(suggestedWeight))
-  }, [suggestedWeight])
+  }, [suggestedWeight, weight])
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -329,27 +521,29 @@ function WorkoutExercise({ log, previous, onSave, onDelete }: { log: ExerciseLog
     setReps('')
   }
 
+  const progressionSettings = { rep_min: repMin, rep_max: repMax, increment_kg: exercise?.increment_kg ?? 0 }
+
   return (
     <div className="card stack">
       <div className="row-between">
         <div>
           <h2 className="h2">{exercise?.name ?? 'Exercise'}</h2>
-          <div className="muted" style={{marginTop:5}}>Target {exercise?.rep_min ?? '?'}–{exercise?.rep_max ?? '?'} reps</div>
+          <div className="muted" style={{marginTop:5}}>Target {targetSets} sets · {repMin}–{repMax} reps</div>
         </div>
-        <span className="badge">{log.exercise_sets?.length ?? 0} sets saved</span>
+        <span className="badge">{log.exercise_sets?.length ?? 0}/{targetSets} sets saved</span>
       </div>
 
       <div className="card-soft">
         <div className="eyebrow">Last time</div>
         <div style={{marginTop:6}}>{lastSets.length ? lastSets.map((s) => `${formatKg(Number(s.weight_kg)).replace(' kg','')}×${s.reps}`).join(' · ') : 'No previous session'}</div>
-        {exercise && previous && <div className="muted" style={{fontSize:12,marginTop:5}}>{progressionRecommendation(exercise, previous)}</div>}
+        {previous && <div className="muted" style={{fontSize:12,marginTop:5}}>{progressionRecommendation(progressionSettings, previous)}</div>}
       </div>
 
       {!!log.exercise_sets?.length && <div className="stack" style={{gap:7}}>{log.exercise_sets.map((set) => <div key={set.id} className="card-soft row-between"><div><strong>Set {set.set_number}</strong> · {formatKg(Number(set.weight_kg))} × {set.reps}</div><button className="btn btn-danger" onClick={() => onDelete(set.id)}>Delete</button></div>)}</div>}
 
       <form className="set-row" onSubmit={submit}>
         <strong>#{(log.exercise_sets?.length ?? 0) + 1}</strong>
-        <label>Weight kg<input required type="number" min="0" step="0.25" value={weight} onChange={(e) => setWeight(e.target.value)} /></label>
+        <label>Weight kg<input required type="number" min="0" step="0.01" inputMode="decimal" value={weight} onChange={(e) => setWeight(e.target.value)} /></label>
         <label>Reps<input required type="number" min="1" max="200" value={reps} onChange={(e) => setReps(e.target.value)} /></label>
         <button className="btn btn-primary set-action" disabled={saving}>{saving ? 'Saving…' : 'Save set'}</button>
       </form>

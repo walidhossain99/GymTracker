@@ -109,3 +109,13 @@ th { color: var(--muted); font-weight: 700; }
   .row-between { align-items:flex-start; }
   .chart-box { height:250px; }
 }
+
+/* Editors added in v1.1 */
+.routine-editor { border-top: 1px solid var(--border); padding-top: 14px; }
+.routine-editor .row { flex-wrap: wrap; }
+.routine-editor select { min-width: 0; }
+.routine-grid:has(.routine-editor) { grid-template-columns: 1fr; }
+@media (max-width: 620px) {
+  .routine-editor .row { align-items: stretch; }
+  .routine-editor .row > select { flex: 1 1 100%; }
+}

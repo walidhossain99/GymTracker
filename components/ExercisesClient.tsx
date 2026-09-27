@@ -10,12 +10,14 @@ import { ProgressLineChart } from './ProgressLineChart'
 import { StatCard } from './StatCard'
 
 type SetDraft = { weight: string; reps: string }
+type ExercisePayload = { name: string; muscle: string; repMin: number; repMax: number; increment: number }
 
 export function ExercisesClient() {
   const supabase = useMemo(() => createClient(), [])
   const [userId, setUserId] = useState<string | null>(null)
   const [exercises, setExercises] = useState<Exercise[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [editingExerciseId, setEditingExerciseId] = useState<string | null>(null)
   const [logs, setLogs] = useState<ExerciseLog[]>([])
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
@@ -58,9 +60,10 @@ export function ExercisesClient() {
   const strengthChange = firstRm > 0 ? ((latestRm - firstRm) / firstRm) * 100 : null
   const chart = logs.map((l) => ({ label: formatDate(l.performed_on).replace(/\s\d{4}$/, ''), e1rm: bestEstimated1RM(l.exercise_sets ?? []) }))
 
-  async function addExercise(payload: { name: string; muscle: string; repMin: number; repMax: number; increment: number }) {
+  async function addExercise(payload: ExercisePayload) {
     if (!userId) return
     setBusy(true)
+    setMessage('')
     const { data, error } = await supabase.from('exercises').insert({
       user_id: userId,
       name: payload.name,
@@ -78,13 +81,51 @@ export function ExercisesClient() {
     }
   }
 
+  async function updateExercise(payload: ExercisePayload, updateRoutineTargets: boolean) {
+    if (!userId || !selected) return
+    setBusy(true)
+    setMessage('')
+    const { error } = await supabase.from('exercises').update({
+      name: payload.name,
+      muscle_group: payload.muscle || null,
+      rep_min: payload.repMin,
+      rep_max: payload.repMax,
+      increment_kg: payload.increment,
+    }).eq('id', selected.id).eq('user_id', userId)
+
+    if (error) {
+      setBusy(false)
+      setMessage(error.message)
+      return
+    }
+
+    if (updateRoutineTargets) {
+      const { error: routineError } = await supabase.from('routine_exercises').update({
+        rep_min: payload.repMin,
+        rep_max: payload.repMax,
+      }).eq('user_id', userId).eq('exercise_id', selected.id)
+      if (routineError) {
+        setBusy(false)
+        setMessage(`Exercise updated, but routine targets could not be updated: ${routineError.message}`)
+        await loadExercises()
+        return
+      }
+    }
+
+    setBusy(false)
+    setEditingExerciseId(null)
+    setMessage(updateRoutineTargets ? 'Exercise and routine targets updated.' : 'Exercise settings updated.')
+    await loadExercises()
+  }
+
   async function removeExercise() {
-    if (!selected || !confirm(`Delete ${selected.name} and all of its history?`)) return
+    if (!selected || !confirm(`Delete ${selected.name} and all of its history? This also removes it from every routine.`)) return
     const { error } = await supabase.from('exercises').delete().eq('id', selected.id)
     if (error) setMessage(error.message)
     else {
       setLogs([])
       setSelectedId(null)
+      setEditingExerciseId(null)
       loadExercises()
     }
   }
@@ -143,8 +184,8 @@ export function ExercisesClient() {
             <div className="row-between"><h2 className="h2">Exercise library</h2><span className="badge">{exercises.length}</span></div>
             <div className="exercise-list">
               {exercises.map((e) => (
-                <button key={e.id} className={`btn ${selectedId === e.id ? 'btn-primary' : ''}`} onClick={() => setSelectedId(e.id)}>
-                  <div>{e.name}</div><div style={{ fontSize: 11, opacity: .7, marginTop: 3 }}>{e.muscle_group || 'Uncategorized'} · {e.rep_min}–{e.rep_max} reps</div>
+                <button key={e.id} className={`btn ${selectedId === e.id ? 'btn-primary' : ''}`} onClick={() => { setSelectedId(e.id); setEditingExerciseId(null) }}>
+                  <div>{e.name}</div><div style={{ fontSize: 11, opacity: .7, marginTop: 3 }}>{e.muscle_group || 'Uncategorized'} · {e.rep_min}–{e.rep_max} reps · +{Number(e.increment_kg)} kg</div>
                 </button>
               ))}
               {!exercises.length && <div className="empty">No exercises yet.</div>}
@@ -156,8 +197,11 @@ export function ExercisesClient() {
           <div className="stack">
             <div className="card stack">
               <div className="row-between">
-                <div><div className="eyebrow">{selected.muscle_group || 'Exercise'}</div><h2 className="h2" style={{ marginTop: 5 }}>{selected.name}</h2><div className="muted">Target {selected.rep_min}–{selected.rep_max} reps · +{selected.increment_kg} kg progression step</div></div>
-                <button className="btn btn-danger" onClick={removeExercise}>Delete</button>
+                <div><div className="eyebrow">{selected.muscle_group || 'Exercise'}</div><h2 className="h2" style={{ marginTop: 5 }}>{selected.name}</h2><div className="muted">Target {selected.rep_min}–{selected.rep_max} reps · +{Number(selected.increment_kg)} kg progression step</div></div>
+                <div className="row">
+                  <button className="btn" onClick={() => setEditingExerciseId(editingExerciseId === selected.id ? null : selected.id)}>{editingExerciseId === selected.id ? 'Close editor' : 'Edit settings'}</button>
+                  <button className="btn btn-danger" onClick={removeExercise}>Delete</button>
+                </div>
               </div>
               <div className="grid grid-3">
                 <StatCard label="Best estimated 1RM" value={best ? formatKg(best) : '—'} />
@@ -165,6 +209,10 @@ export function ExercisesClient() {
                 <StatCard label="Strength change" value={strengthChange === null ? '—' : `${strengthChange >= 0 ? '+' : ''}${strengthChange.toFixed(1)}%`} />
               </div>
             </div>
+
+            {editingExerciseId === selected.id && (
+              <ExerciseEditForm key={selected.id} exercise={selected} onSave={updateExercise} onCancel={() => setEditingExerciseId(null)} busy={busy} />
+            )}
 
             <div className="card stack">
               <div><h2 className="h2">Progression guidance</h2><div className="muted" style={{ marginTop: 7 }}>{progressionRecommendation(selected, latest)}</div></div>
@@ -204,7 +252,7 @@ export function ExercisesClient() {
   )
 }
 
-function ExerciseCreateForm({ onAdd, busy }: { onAdd: (p: { name: string; muscle: string; repMin: number; repMax: number; increment: number }) => void; busy: boolean }) {
+function ExerciseCreateForm({ onAdd, busy }: { onAdd: (p: ExercisePayload) => void; busy: boolean }) {
   const [name, setName] = useState('')
   const [muscle, setMuscle] = useState('')
   const [repMin, setRepMin] = useState('6')
@@ -219,12 +267,56 @@ function ExerciseCreateForm({ onAdd, busy }: { onAdd: (p: { name: string; muscle
   }
   return (
     <form className="card stack" onSubmit={submit}>
-      <div><h2 className="h2">Add exercise</h2><div className="muted">Define the rep range and load jump once.</div></div>
+      <div><h2 className="h2">Add exercise</h2><div className="muted">Set defaults here. You can edit them later at any time.</div></div>
       <label>Name<input required value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Barbell Bench Press" /></label>
       <label>Muscle group<input value={muscle} onChange={(e) => setMuscle(e.target.value)} placeholder="Chest" /></label>
       <div className="grid grid-2"><label>Rep min<input type="number" min="1" max="100" value={repMin} onChange={(e) => setRepMin(e.target.value)} /></label><label>Rep max<input type="number" min="1" max="100" value={repMax} onChange={(e) => setRepMax(e.target.value)} /></label></div>
-      <label>Weight increase when target cleared (kg)<input type="number" min="0" step="0.25" value={increment} onChange={(e) => setIncrement(e.target.value)} /></label>
+      <label>Weight increase when target cleared (kg)<input type="number" min="0" step="0.01" inputMode="decimal" value={increment} onChange={(e) => setIncrement(e.target.value)} /></label>
       <button className="btn btn-primary" disabled={busy}>Add exercise</button>
+    </form>
+  )
+}
+
+function ExerciseEditForm({ exercise, onSave, onCancel, busy }: {
+  exercise: Exercise
+  onSave: (payload: ExercisePayload, updateRoutineTargets: boolean) => Promise<void>
+  onCancel: () => void
+  busy: boolean
+}) {
+  const [name, setName] = useState(exercise.name)
+  const [muscle, setMuscle] = useState(exercise.muscle_group ?? '')
+  const [repMin, setRepMin] = useState(String(exercise.rep_min))
+  const [repMax, setRepMax] = useState(String(exercise.rep_max))
+  const [increment, setIncrement] = useState(String(exercise.increment_kg))
+  const [updateRoutines, setUpdateRoutines] = useState(true)
+
+  async function submit(e: FormEvent) {
+    e.preventDefault()
+    const min = Number(repMin), max = Number(repMax), inc = Number(increment)
+    if (!name.trim() || !Number.isInteger(min) || !Number.isInteger(max) || min < 1 || max < min || !Number.isFinite(inc) || inc < 0) return
+    await onSave({ name: name.trim(), muscle: muscle.trim(), repMin: min, repMax: max, increment: inc }, updateRoutines)
+  }
+
+  return (
+    <form className="card stack" onSubmit={submit}>
+      <div className="row-between">
+        <div><h2 className="h2">Edit exercise settings</h2><div className="muted" style={{ marginTop: 5 }}>Change the exercise name, rep range or progression jump without deleting its history.</div></div>
+        <button type="button" className="btn" onClick={onCancel}>Cancel</button>
+      </div>
+      <div className="grid grid-2">
+        <label>Name<input required value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <label>Muscle group<input value={muscle} onChange={(e) => setMuscle(e.target.value)} /></label>
+      </div>
+      <div className="grid grid-3">
+        <label>Rep min<input required type="number" min="1" max="100" value={repMin} onChange={(e) => setRepMin(e.target.value)} /></label>
+        <label>Rep max<input required type="number" min="1" max="100" value={repMax} onChange={(e) => setRepMax(e.target.value)} /></label>
+        <label>Load increase (kg)<input required type="number" min="0" step="0.01" inputMode="decimal" value={increment} onChange={(e) => setIncrement(e.target.value)} /></label>
+      </div>
+      <label className="card-soft" style={{ display: 'flex', gridTemplateColumns: 'auto 1fr', alignItems: 'center', gap: 10, color: 'var(--text)' }}>
+        <input type="checkbox" checked={updateRoutines} onChange={(e) => setUpdateRoutines(e.target.checked)} style={{ width: 18, minHeight: 18 }} />
+        <span><strong>Apply the new rep range to routines that use this exercise</strong><span className="muted" style={{ display: 'block', fontSize: 12, marginTop: 3 }}>Turn this off if a particular workout day intentionally uses a different rep range.</span></span>
+      </label>
+      <button className="btn btn-primary" disabled={busy}>{busy ? 'Saving…' : 'Save exercise changes'}</button>
     </form>
   )
 }
@@ -246,7 +338,7 @@ function ExerciseLogForm({ onSave, busy, latest }: { onSave: (date: string, sets
     <form className="card stack" onSubmit={(e) => { e.preventDefault(); onSave(date, sets) }}>
       <div className="row-between"><div><h2 className="h2">Quick exercise log</h2><div className="muted">For a full routine, use the Workouts page.</div></div><input type="date" value={date} onChange={(e) => setDate(e.target.value)} style={{ maxWidth: 170 }} /></div>
       <div className="stack">
-        {sets.map((set, i) => <div className="set-row" key={i}><strong>#{i + 1}</strong><label>Weight kg<input required type="number" min="0" step="0.25" value={set.weight} onChange={(e) => update(i, 'weight', e.target.value)} /></label><label>Reps<input required type="number" min="1" max="200" value={set.reps} onChange={(e) => update(i, 'reps', e.target.value)} /></label><button type="button" className="btn btn-danger set-action" onClick={() => setSets((s) => s.filter((_, x) => x !== i))}>Remove</button></div>)}
+        {sets.map((set, i) => <div className="set-row" key={i}><strong>#{i + 1}</strong><label>Weight kg<input required type="number" min="0" step="0.01" inputMode="decimal" value={set.weight} onChange={(e) => update(i, 'weight', e.target.value)} /></label><label>Reps<input required type="number" min="1" max="200" value={set.reps} onChange={(e) => update(i, 'reps', e.target.value)} /></label><button type="button" className="btn btn-danger set-action" onClick={() => setSets((s) => s.filter((_, x) => x !== i))}>Remove</button></div>)}
       </div>
       <div className="row"><button type="button" className="btn" onClick={() => setSets((s) => [...s, { weight: s.at(-1)?.weight ?? '', reps: '' }])}>+ Set</button><button className="btn btn-primary" disabled={busy || !sets.length}>Save session</button></div>
     </form>
