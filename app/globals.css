@@ -119,3 +119,31 @@ th { color: var(--muted); font-weight: 700; }
   .routine-editor .row { align-items: stretch; }
   .routine-editor .row > select { flex: 1 1 100%; }
 }
+
+/* Workout editing + manual logging date added in v1.2 */
+.routine-start-date { display:flex; align-items:end; gap:10px; flex-wrap:wrap; }
+.routine-start-date label { min-width:180px; }
+.routine-edit-focus { max-width:980px; }
+.routine-sort-item { transition:border-color .14s ease, background .14s ease, opacity .14s ease; }
+.routine-sort-item.drag-over { border-color:var(--accent); background:rgba(124,247,165,.06); }
+.routine-sort-item.dragging { opacity:.55; }
+.routine-sort-title { display:flex; align-items:center; gap:11px; min-width:0; }
+.drag-handle { display:grid; place-items:center; width:34px; min-width:34px; height:44px; border:1px solid var(--border); border-radius:10px; color:var(--muted); cursor:grab; user-select:none; touch-action:none; font-weight:900; letter-spacing:-2px; }
+.drag-handle:active { cursor:grabbing; }
+.active-workout-header { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:end; gap:14px; }
+.active-date-editor { display:flex; align-items:end; gap:8px; }
+.active-date-editor label { min-width:170px; }
+.active-workout-actions { justify-content:flex-end; }
+@media (max-width: 900px) {
+  .active-workout-header { grid-template-columns:1fr; align-items:stretch; }
+  .active-date-editor { flex-wrap:wrap; }
+  .active-date-editor label { flex:1 1 180px; }
+  .active-workout-actions { justify-content:flex-start; }
+}
+@media (max-width: 620px) {
+  .routine-start-date { width:100%; align-items:stretch; }
+  .routine-start-date label { flex:1 1 100%; }
+  .routine-sort-item .row-between { gap:10px; }
+  .routine-sort-title { align-items:flex-start; }
+  .drag-handle { width:40px; min-width:40px; }
+}

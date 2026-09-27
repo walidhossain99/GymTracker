@@ -1,6 +1,6 @@
 'use client'
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
+import { FormEvent, PointerEvent as ReactPointerEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { getCurrentUser } from '@/lib/user'
 import { ensureStarterData } from '@/lib/seed'
@@ -23,6 +23,7 @@ export function WorkoutsClient() {
   const [editingRoutineId, setEditingRoutineId] = useState<string | null>(null)
   const [message, setMessage] = useState('')
   const [busy, setBusy] = useState(false)
+  const [workoutDate, setWorkoutDate] = useState(todayLocalISO())
 
   const load = useCallback(async () => {
     const user = await getCurrentUser(supabase)
@@ -217,14 +218,14 @@ export function WorkoutsClient() {
     }
   }
 
-  async function startRoutine(routine: Routine) {
-    if (!userId || active) return
+  async function startRoutine(routine: Routine, sessionDate: string) {
+    if (!userId || active || !sessionDate) return
     setBusy(true)
     setMessage('')
     const { data: session, error: sessionError } = await supabase.from('workout_sessions').insert({
       user_id: userId,
       routine_id: routine.id,
-      session_date: todayLocalISO(),
+      session_date: sessionDate,
     }).select().single()
     if (sessionError || !session) {
       setBusy(false)
@@ -236,14 +237,46 @@ export function WorkoutsClient() {
       user_id: userId,
       exercise_id: item.exercise_id,
       session_id: session.id,
-      performed_on: todayLocalISO(),
+      performed_on: sessionDate,
       order_index: index,
     })))
     setBusy(false)
     if (logsError) setMessage(logsError.message)
     else {
-      setMessage('Workout started. Every set you save is immediately stored in the cloud.')
+      setMessage(`Workout started for ${formatDate(sessionDate)}. Every set you save is immediately stored in the cloud.`)
       load()
+    }
+  }
+
+  async function updateActiveWorkoutDate(sessionDate: string) {
+    if (!userId || !active || !sessionDate || sessionDate === active.session_date) return
+    setBusy(true)
+    setMessage('')
+
+    const { error: sessionError } = await supabase
+      .from('workout_sessions')
+      .update({ session_date: sessionDate })
+      .eq('id', active.id)
+      .eq('user_id', userId)
+
+    if (sessionError) {
+      setBusy(false)
+      setMessage(sessionError.message)
+      return
+    }
+
+    const { error: logsError } = await supabase
+      .from('exercise_logs')
+      .update({ performed_on: sessionDate })
+      .eq('session_id', active.id)
+      .eq('user_id', userId)
+
+    setBusy(false)
+    if (logsError) setMessage(logsError.message)
+    else {
+      setWorkoutDate(sessionDate)
+      setMessage(`Workout date changed to ${formatDate(sessionDate)}.`)
+      await load()
     }
   }
 
@@ -285,6 +318,7 @@ export function WorkoutsClient() {
   }
 
   const activeRoutine = active?.routine_id ? routines.find((routine) => routine.id === active.routine_id) ?? null : null
+  const editingRoutine = editingRoutineId ? routines.find((routine) => routine.id === editingRoutineId) ?? null : null
 
   return (
     <div className="container stack">
@@ -297,24 +331,48 @@ export function WorkoutsClient() {
       {message && <div className="notice">{message}</div>}
 
       {active ? (
-        <ActiveWorkout session={active} routine={activeRoutine} previous={previous} onSaveSet={saveSet} onDeleteSet={deleteSet} onFinish={finishWorkout} onDiscard={discardWorkout} busy={busy} />
+        <ActiveWorkout
+          session={active}
+          routine={activeRoutine}
+          previous={previous}
+          onSaveSet={saveSet}
+          onDeleteSet={deleteSet}
+          onUpdateDate={updateActiveWorkoutDate}
+          onFinish={finishWorkout}
+          onDiscard={discardWorkout}
+          busy={busy}
+        />
+      ) : editingRoutine ? (
+        <section className="stack routine-edit-focus">
+          <div className="row-between">
+            <div>
+              <div className="eyebrow">Editing workout day</div>
+              <h2 className="h2" style={{marginTop:6}}>{editingRoutine.name}</h2>
+              <div className="muted" style={{marginTop:5}}>Only this routine is shown while editing so you can focus on its exercise order, sets and rep ranges.</div>
+            </div>
+            <button type="button" className="btn" onClick={() => setEditingRoutineId(null)}>← Back to routines</button>
+          </div>
+          <RoutineEditForm routine={editingRoutine} exercises={exercises} onSave={updateRoutine} onCancel={() => setEditingRoutineId(null)} busy={busy} />
+        </section>
       ) : (
         <>
           <section className="stack">
-            <div className="row-between"><div><h2 className="h2">Choose a routine</h2><div className="muted">Every workout day is editable. Add or remove exercises, change order, sets and rep ranges whenever your plan changes.</div></div><span className="badge"><span className="live-dot" />Ready</span></div>
+            <div className="row-between">
+              <div><h2 className="h2">Choose a routine</h2><div className="muted">Every workout day is editable. Add or remove exercises, change order, sets and rep ranges whenever your plan changes.</div></div>
+              <div className="routine-start-date">
+                <label>Workout date<input type="date" value={workoutDate} onChange={(e) => setWorkoutDate(e.target.value)} /></label>
+                <span className="badge"><span className="live-dot" />Ready</span>
+              </div>
+            </div>
             <div className="routine-grid">
               {routines.map((routine) => (
                 <div className="card stack" key={routine.id}>
                   <div className="row-between">
                     <div><div className="eyebrow">{routine.routine_exercises?.length ?? 0} exercises</div><h2 className="h2" style={{marginTop:6}}>{routine.name}</h2><div className="muted" style={{marginTop:6}}>{routine.description}</div></div>
-                    <div className="row"><button className="btn" onClick={() => setEditingRoutineId(editingRoutineId === routine.id ? null : routine.id)}>{editingRoutineId === routine.id ? 'Close' : 'Edit'}</button><button className="btn btn-danger" onClick={() => deleteRoutine(routine.id, routine.name)}>Delete</button></div>
+                    <div className="row"><button className="btn" onClick={() => setEditingRoutineId(routine.id)}>Edit</button><button className="btn btn-danger" onClick={() => deleteRoutine(routine.id, routine.name)}>Delete</button></div>
                   </div>
                   <div className="stack" style={{gap:7}}>{routine.routine_exercises?.map((item) => <div className="card-soft" key={item.id}><strong>{item.exercises?.name}</strong><div className="muted" style={{fontSize:12,marginTop:3}}>{item.target_sets} sets · {item.rep_min}–{item.rep_max} reps</div></div>)}</div>
-                  {editingRoutineId === routine.id ? (
-                    <RoutineEditForm routine={routine} exercises={exercises} onSave={updateRoutine} onCancel={() => setEditingRoutineId(null)} busy={busy} />
-                  ) : (
-                    <button className="btn btn-primary" disabled={busy} onClick={() => startRoutine(routine)}>Start {routine.name}</button>
-                  )}
+                  <button className="btn btn-primary" disabled={busy || !workoutDate} onClick={() => startRoutine(routine, workoutDate)}>Start {routine.name}</button>
                 </div>
               ))}
             </div>
@@ -385,6 +443,9 @@ function RoutineEditForm({ routine, exercises, onSave, onCancel, busy }: {
     rep_max: item.rep_max,
   })))
   const [addId, setAddId] = useState('')
+  const [draggingIndex, setDraggingIndex] = useState<number | null>(null)
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null)
+  const dragIndexRef = useRef<number | null>(null)
 
   const available = exercises.filter((exercise) => !items.some((item) => item.exercise_id === exercise.id))
 
@@ -400,6 +461,44 @@ function RoutineEditForm({ routine, exercises, onSave, onCancel, busy }: {
       ;[next[index], next[nextIndex]] = [next[nextIndex], next[index]]
       return next
     })
+  }
+
+  function reorder(from: number, to: number) {
+    if (from === to || from < 0 || to < 0 || from >= items.length || to >= items.length) return
+    setItems((current) => {
+      const next = [...current]
+      const [moved] = next.splice(from, 1)
+      next.splice(to, 0, moved)
+      return next
+    })
+  }
+
+  function beginPointerDrag(e: ReactPointerEvent<HTMLSpanElement>, index: number) {
+    dragIndexRef.current = index
+    setDraggingIndex(index)
+    setDragOverIndex(index)
+    e.currentTarget.setPointerCapture?.(e.pointerId)
+    e.preventDefault()
+  }
+
+  function continuePointerDrag(e: ReactPointerEvent<HTMLSpanElement>) {
+    const from = dragIndexRef.current
+    if (from === null) return
+    const target = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('[data-routine-index]')
+    const to = target ? Number(target.dataset.routineIndex) : Number.NaN
+    if (!Number.isInteger(to) || to < 0 || to >= items.length || to === from) return
+    reorder(from, to)
+    dragIndexRef.current = to
+    setDraggingIndex(to)
+    setDragOverIndex(to)
+    e.preventDefault()
+  }
+
+  function endPointerDrag(e: ReactPointerEvent<HTMLSpanElement>) {
+    if (e.currentTarget.hasPointerCapture?.(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId)
+    dragIndexRef.current = null
+    setDraggingIndex(null)
+    setDragOverIndex(null)
   }
 
   function addExercise() {
@@ -429,12 +528,30 @@ function RoutineEditForm({ routine, exercises, onSave, onCancel, busy }: {
         {items.map((item, index) => {
           const exercise = exercises.find((entry) => entry.id === item.exercise_id)
           return (
-            <div className="card-soft stack" key={item.exercise_id} style={{gap:10}}>
+            <div
+              className={`card-soft stack routine-sort-item ${dragOverIndex === index ? 'drag-over' : ''} ${draggingIndex === index ? 'dragging' : ''}`}
+              key={item.exercise_id}
+              style={{gap:10}}
+              data-routine-index={index}
+            >
               <div className="row-between">
-                <div><strong>{index + 1}. {exercise?.name ?? 'Exercise'}</strong><div className="muted" style={{fontSize:11,marginTop:2}}>{exercise?.muscle_group || 'Uncategorized'}</div></div>
+                <div className="routine-sort-title">
+                  <span
+                    className="drag-handle"
+                    role="button"
+                    tabIndex={0}
+                    title="Drag to reorder"
+                    aria-label={`Drag ${exercise?.name ?? 'exercise'} to reorder`}
+                    onPointerDown={(e) => beginPointerDrag(e, index)}
+                    onPointerMove={continuePointerDrag}
+                    onPointerUp={endPointerDrag}
+                    onPointerCancel={endPointerDrag}
+                  >⋮⋮</span>
+                  <div><strong>{index + 1}. {exercise?.name ?? 'Exercise'}</strong><div className="muted" style={{fontSize:11,marginTop:2}}>{exercise?.muscle_group || 'Uncategorized'}</div></div>
+                </div>
                 <div className="row">
-                  <button type="button" className="btn" disabled={index === 0} onClick={() => move(index, -1)}>↑</button>
-                  <button type="button" className="btn" disabled={index === items.length - 1} onClick={() => move(index, 1)}>↓</button>
+                  <button type="button" className="btn" disabled={index === 0} onClick={() => move(index, -1)} aria-label="Move exercise up">↑</button>
+                  <button type="button" className="btn" disabled={index === items.length - 1} onClick={() => move(index, 1)} aria-label="Move exercise down">↓</button>
                   <button type="button" className="btn btn-danger" onClick={() => setItems((current) => current.filter((_, i) => i !== index))}>Remove</button>
                 </div>
               </div>
@@ -465,21 +582,36 @@ function RoutineEditForm({ routine, exercises, onSave, onCancel, busy }: {
   )
 }
 
-function ActiveWorkout({ session, routine, previous, onSaveSet, onDeleteSet, onFinish, onDiscard, busy }: {
+function ActiveWorkout({ session, routine, previous, onSaveSet, onDeleteSet, onUpdateDate, onFinish, onDiscard, busy }: {
   session: ActiveSession
   routine: Routine | null
   previous: PreviousMap
   onSaveSet: (log: ExerciseLog, weight: number, reps: number) => Promise<void>
   onDeleteSet: (id: string) => Promise<void>
+  onUpdateDate: (date: string) => Promise<void>
   onFinish: () => Promise<void>
   onDiscard: () => Promise<void>
   busy: boolean
 }) {
+  const [dateDraft, setDateDraft] = useState(session.session_date)
+
+  useEffect(() => {
+    setDateDraft(session.session_date)
+  }, [session.session_date])
+
   return (
     <section className="stack">
-      <div className="card row-between">
-        <div><div className="eyebrow"><span className="live-dot" />Active workout</div><h2 className="h2" style={{marginTop:7}}>{session.routines?.name ?? 'Workout'}</h2><div className="muted" style={{marginTop:4}}>{formatDate(session.session_date)} · Autosaving sets</div></div>
-        <div className="row"><button className="btn btn-danger" onClick={onDiscard}>Discard</button><button className="btn btn-primary" disabled={busy} onClick={onFinish}>{busy ? 'Finishing…' : 'Finish workout'}</button></div>
+      <div className="card active-workout-header">
+        <div>
+          <div className="eyebrow"><span className="live-dot" />Active workout</div>
+          <h2 className="h2" style={{marginTop:7}}>{session.routines?.name ?? 'Workout'}</h2>
+          <div className="muted" style={{marginTop:4}}>Autosaving sets to the cloud</div>
+        </div>
+        <div className="active-date-editor">
+          <label>Workout date<input type="date" value={dateDraft} onChange={(e) => setDateDraft(e.target.value)} /></label>
+          <button type="button" className="btn" disabled={busy || !dateDraft || dateDraft === session.session_date} onClick={() => onUpdateDate(dateDraft)}>Save date</button>
+        </div>
+        <div className="row active-workout-actions"><button className="btn btn-danger" onClick={onDiscard}>Discard</button><button className="btn btn-primary" disabled={busy} onClick={onFinish}>{busy ? 'Finishing…' : 'Finish workout'}</button></div>
       </div>
 
       {session.exercise_logs.map((log) => {
