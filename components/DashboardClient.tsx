@@ -5,17 +5,31 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { ensureStarterData } from '@/lib/seed'
 import { getCurrentUser } from '@/lib/user'
-import type { BodyweightEntry, ExerciseLog, WorkoutSession } from '@/lib/types'
-import { bestEstimated1RM, formatDate, formatKg } from '@/lib/metrics'
+import type { BodyweightEntry, ExerciseLog, RoutineExercise, WorkoutSession } from '@/lib/types'
+import { bestEstimated1RM, formatDate, formatKg, getProgressionDecision } from '@/lib/metrics'
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh'
 import { ProgressLineChart } from './ProgressLineChart'
 import { StatCard } from './StatCard'
+
+type DashboardExerciseInfo = {
+  name: string
+  muscle_group: string | null
+  rep_min: number
+  rep_max: number
+  increment_kg: number
+}
+
+type DashboardExerciseLog = Omit<ExerciseLog, 'exercises'> & {
+  exercises?: DashboardExerciseInfo | null
+  workout_sessions?: { routine_id: string | null } | null
+}
 
 export function DashboardClient() {
   const supabase = useMemo(() => createClient(), [])
   const [userId, setUserId] = useState<string | null>(null)
   const [weights, setWeights] = useState<BodyweightEntry[]>([])
-  const [logs, setLogs] = useState<ExerciseLog[]>([])
+  const [logs, setLogs] = useState<DashboardExerciseLog[]>([])
+  const [routineExercises, setRoutineExercises] = useState<RoutineExercise[]>([])
   const [sessions, setSessions] = useState<WorkoutSession[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -26,16 +40,25 @@ export function DashboardClient() {
       setUserId(user.id)
       await ensureStarterData(supabase, user.id)
 
-      const [weightRes, logRes, sessionRes] = await Promise.all([
+      const [weightRes, logRes, routineExerciseRes, sessionRes] = await Promise.all([
         supabase.from('bodyweight_entries').select('*').eq('user_id', user.id).order('entry_date', { ascending: true }).limit(90),
-        supabase.from('exercise_logs').select('*, exercises(name), exercise_sets(*)').eq('user_id', user.id).order('performed_on', { ascending: false }).limit(30),
+        supabase
+          .from('exercise_logs')
+          .select('*, exercises(name, muscle_group, rep_min, rep_max, increment_kg), exercise_sets(*), workout_sessions(routine_id)')
+          .eq('user_id', user.id)
+          .order('performed_on', { ascending: false })
+          .order('created_at', { ascending: false })
+          .limit(120),
+        supabase.from('routine_exercises').select('*').eq('user_id', user.id),
         supabase.from('workout_sessions').select('*, routines(name)').eq('user_id', user.id).order('started_at', { ascending: false }).limit(8),
       ])
       if (weightRes.error) throw weightRes.error
       if (logRes.error) throw logRes.error
+      if (routineExerciseRes.error) throw routineExerciseRes.error
       if (sessionRes.error) throw sessionRes.error
       setWeights((weightRes.data ?? []) as BodyweightEntry[])
-      setLogs((logRes.data ?? []) as ExerciseLog[])
+      setLogs((logRes.data ?? []) as DashboardExerciseLog[])
+      setRoutineExercises((routineExerciseRes.data ?? []) as RoutineExercise[])
       setSessions((sessionRes.data ?? []) as WorkoutSession[])
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not load dashboard.')
@@ -45,7 +68,7 @@ export function DashboardClient() {
   }, [supabase])
 
   useEffect(() => { load() }, [load])
-  useRealtimeRefresh(userId, ['bodyweight_entries', 'exercise_logs', 'exercise_sets', 'workout_sessions'], load)
+  useRealtimeRefresh(userId, ['bodyweight_entries', 'exercise_logs', 'exercise_sets', 'workout_sessions', 'routine_exercises', 'exercises'], load)
 
   const latestWeight = weights.at(-1)
   const firstWeight = weights[0]
@@ -60,6 +83,50 @@ export function DashboardClient() {
     label: formatDate(w.entry_date).replace(/\s\d{4}$/, ''),
     weight: Number(w.weight_kg),
   }))
+
+  const progressionAlerts = useMemo(() => {
+    const latestByExercise = new Map<string, DashboardExerciseLog>()
+    for (const log of logs) {
+      if (!latestByExercise.has(log.exercise_id)) latestByExercise.set(log.exercise_id, log)
+    }
+
+    return [...latestByExercise.values()].flatMap((log) => {
+      const exercise = log.exercises
+      if (!exercise) return []
+
+      const routineId = log.workout_sessions?.routine_id ?? null
+      const routineTarget = routineExercises.find((item) =>
+        item.exercise_id === log.exercise_id && (!routineId || item.routine_id === routineId)
+      )
+      const targetSets = routineTarget?.target_sets ?? Math.max(1, log.exercise_sets?.length ?? 1)
+      const repMin = routineTarget?.rep_min ?? exercise.rep_min
+      const repMax = routineTarget?.rep_max ?? exercise.rep_max
+      const decision = getProgressionDecision(
+        { rep_min: repMin, rep_max: repMax, increment_kg: exercise.increment_kg },
+        log,
+        targetSets
+      )
+
+      if (decision.status !== 'increase' || decision.workingWeight === null || decision.nextWeight === null) return []
+
+      return [{
+        id: log.id,
+        exerciseName: exercise.name,
+        muscleGroup: exercise.muscle_group,
+        performedOn: log.performed_on,
+        currentWeight: decision.workingWeight,
+        nextWeight: decision.nextWeight,
+        incrementKg: decision.incrementKg,
+        targetSets,
+        repMin,
+        repMax,
+        reps: [...(log.exercise_sets ?? [])]
+          .sort((a, b) => a.set_number - b.set_number)
+          .slice(0, targetSets)
+          .map((set) => Number(set.reps)),
+      }]
+    }).sort((a, b) => b.performedOn.localeCompare(a.performedOn))
+  }, [logs, routineExercises])
 
   if (loading) return <div className="container"><div className="page-head"><h1 className="h1">Loading your progress…</h1></div></div>
 
@@ -81,6 +148,48 @@ export function DashboardClient() {
         <StatCard label="Weight change" value={weightChange === null ? '—' : `${weightChange >= 0 ? '+' : ''}${weightChange.toFixed(1)} kg`} sub="Across saved weigh-ins" />
         <StatCard label="Recent workouts" value={String(completedSessions.length)} sub="Among latest 8 sessions" />
         <StatCard label="Best recent e1RM" value={strongest?.e1rm ? formatKg(strongest.e1rm) : '—'} sub={strongest?.log.exercises?.name ?? 'Log sets to calculate'} />
+      </section>
+
+      <section className="card stack progression-notifications">
+        <div className="row-between">
+          <div>
+            <div className="eyebrow">Progressive overload</div>
+            <h2 className="h2">Progression notifications</h2>
+            <p className="muted progression-notification-intro">Exercises whose latest completed working sets cleared the top of their programmed rep range.</p>
+          </div>
+          <span className={progressionAlerts.length ? 'badge badge-good' : 'badge'}>{progressionAlerts.length} ready</span>
+        </div>
+
+        {progressionAlerts.length ? (
+          <div className="progression-notification-list">
+            {progressionAlerts.map((alert) => (
+              <div className="progression-notification-item" key={alert.id}>
+                <div className="progression-notification-copy">
+                  <span className="badge badge-good">↑ LEVEL UP</span>
+                  <div>
+                    <strong>{alert.exerciseName}</strong>
+                    <div className="muted progression-notification-meta">
+                      {alert.muscleGroup ? `${alert.muscleGroup} · ` : ''}{formatDate(alert.performedOn)} · {alert.targetSets} × {alert.repMin}–{alert.repMax}
+                    </div>
+                    <div className="progression-notification-reps">Cleared with {alert.reps.join(' / ')} reps at {formatKg(alert.currentWeight)}.</div>
+                  </div>
+                </div>
+                <div className="progression-notification-load">
+                  <span>Next session</span>
+                  <strong>{formatKg(alert.nextWeight)}</strong>
+                  <small>+{formatKg(alert.incrementKg)}</small>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="card-soft progression-notification-empty">
+            <strong>No load increases waiting right now.</strong>
+            <div className="muted">When you hit the upper rep target on every programmed working set at one weight, it will appear here automatically.</div>
+          </div>
+        )}
+
+        <div className="row"><Link href="/workouts" className="btn btn-primary">Open workouts</Link><Link href="/exercises" className="btn btn-ghost">Exercise history</Link></div>
       </section>
 
       <section className="grid grid-2">

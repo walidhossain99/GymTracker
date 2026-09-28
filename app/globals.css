@@ -331,3 +331,42 @@ th { color: var(--muted); font-weight: 700; }
     text-align: left;
   }
 }
+
+/* v1.9 — lightweight progression notifications on the dashboard */
+.progression-notifications { border-color: rgba(124,247,165,.20); }
+.progression-notification-intro { margin: 5px 0 0; max-width: 720px; }
+.progression-notification-list { display: grid; gap: 10px; }
+.progression-notification-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 15px;
+  border: 1px solid rgba(124,247,165,.26);
+  border-radius: 15px;
+  background: linear-gradient(135deg, rgba(124,247,165,.07), rgba(23,29,39,.86) 48%);
+}
+.progression-notification-copy { display: flex; align-items: center; gap: 14px; min-width: 0; }
+.progression-notification-copy strong { display: block; margin-bottom: 3px; font-size: 17px; }
+.progression-notification-meta { font-size: 12px; }
+.progression-notification-reps { margin-top: 6px; color: #dce3eb; font-size: 14px; }
+.progression-notification-load {
+  flex: 0 0 auto;
+  min-width: 150px;
+  display: grid;
+  gap: 3px;
+  padding: 11px 14px;
+  border-radius: 13px;
+  border: 1px solid rgba(124,247,165,.30);
+  background: rgba(124,247,165,.08);
+  text-align: right;
+}
+.progression-notification-load span { color: var(--muted); font-size: 12px; }
+.progression-notification-load strong { color: var(--success); font-size: 22px; }
+.progression-notification-load small { color: var(--success); font-weight: 800; }
+.progression-notification-empty { display: grid; gap: 5px; }
+@media (max-width: 720px) {
+  .progression-notification-item { align-items: stretch; flex-direction: column; }
+  .progression-notification-copy { align-items: flex-start; flex-direction: column; gap: 9px; }
+  .progression-notification-load { width: 100%; text-align: left; }
+}
