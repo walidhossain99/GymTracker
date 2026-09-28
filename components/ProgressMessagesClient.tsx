@@ -3,16 +3,14 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { getCurrentUser } from '@/lib/user'
 import { formatDate, formatKg } from '@/lib/metrics'
 import { buildProgressMessages } from '@/lib/progressInbox'
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh'
 import type { Exercise, RoutineExercise } from '@/lib/types'
 import type { LogWithSession, ProgressMessageItem } from '@/lib/progressInbox'
 
-export function ProgressMessagesClient() {
+export function ProgressMessagesClient({ userId }: { userId: string }) {
   const supabase = useMemo(() => createClient(), [])
-  const [userId, setUserId] = useState<string | null>(null)
   const [items, setItems] = useState<ProgressMessageItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -20,35 +18,38 @@ export function ProgressMessagesClient() {
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
-    const user = await getCurrentUser(supabase)
-    setUserId(user.id)
 
-    const [exerciseRes, routineItemRes, logRes] = await Promise.all([
-      supabase.from('exercises').select('*').eq('user_id', user.id).order('name'),
-      supabase.from('routine_exercises').select('*').eq('user_id', user.id),
-      supabase
-        .from('exercise_logs')
-        .select('*, exercise_sets(*), workout_sessions(routine_id, session_date)')
-        .eq('user_id', user.id)
-        .order('performed_on', { ascending: false })
-        .order('created_at', { ascending: false })
-        .limit(400),
-    ])
+    try {
+      const [exerciseRes, routineItemRes, logRes] = await Promise.all([
+        supabase.from('exercises').select('*').eq('user_id', userId).order('name'),
+        supabase.from('routine_exercises').select('*').eq('user_id', userId),
+        supabase
+          .from('exercise_logs')
+          .select('*, exercise_sets(*), workout_sessions(routine_id, session_date)')
+          .eq('user_id', userId)
+          .order('performed_on', { ascending: false })
+          .order('created_at', { ascending: false })
+          .limit(400),
+      ])
 
-    const firstError = exerciseRes.error ?? routineItemRes.error ?? logRes.error
-    if (firstError) {
-      setError(firstError.message)
+      const firstError = exerciseRes.error ?? routineItemRes.error ?? logRes.error
+      if (firstError) {
+        setError(firstError.message)
+        setLoading(false)
+        return
+      }
+
+      setItems(buildProgressMessages(
+        (exerciseRes.data ?? []) as Exercise[],
+        (routineItemRes.data ?? []) as RoutineExercise[],
+        (logRes.data ?? []) as unknown as LogWithSession[]
+      ))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load progression messages.')
+    } finally {
       setLoading(false)
-      return
     }
-
-    setItems(buildProgressMessages(
-      (exerciseRes.data ?? []) as Exercise[],
-      (routineItemRes.data ?? []) as RoutineExercise[],
-      (logRes.data ?? []) as unknown as LogWithSession[]
-    ))
-    setLoading(false)
-  }, [supabase])
+  }, [supabase, userId])
 
   useEffect(() => { void load() }, [load])
   useRealtimeRefresh(userId, ['exercises', 'routine_exercises', 'workout_sessions', 'exercise_logs', 'exercise_sets'], load)

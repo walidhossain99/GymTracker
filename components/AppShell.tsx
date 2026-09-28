@@ -4,7 +4,6 @@ import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { getCurrentUser } from '@/lib/user'
 import { buildProgressMessages, progressMessageSignature } from '@/lib/progressInbox'
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh'
 import type { Exercise, RoutineExercise } from '@/lib/types'
@@ -19,33 +18,35 @@ const nav = [
   ['/analytics', 'Analytics'],
 ] as const
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({ children, userId }: { children: React.ReactNode; userId: string }) {
   const pathname = usePathname()
   const supabase = useMemo(() => createClient(), [])
-  const [userId, setUserId] = useState<string | null>(null)
-  const [currentMessageSignature, setCurrentMessageSignature] = useState('')
-  const [seenMessageSignature, setSeenMessageSignature] = useState('')
   const [hasUnreadMessages, setHasUnreadMessages] = useState(false)
 
   const loadMessageState = useCallback(async () => {
     try {
-      const user = await getCurrentUser(supabase)
-      setUserId(user.id)
-
-      const [exerciseRes, routineItemRes, logRes] = await Promise.all([
-        supabase.from('exercises').select('*').eq('user_id', user.id).order('name'),
-        supabase.from('routine_exercises').select('*').eq('user_id', user.id),
+      const [exerciseRes, routineItemRes, logRes, profileRes] = await Promise.all([
+        supabase.from('exercises').select('*').eq('user_id', userId).order('name'),
+        supabase.from('routine_exercises').select('*').eq('user_id', userId),
         supabase
           .from('exercise_logs')
           .select('*, exercise_sets(*), workout_sessions(routine_id, session_date)')
-          .eq('user_id', user.id)
+          .eq('user_id', userId)
           .order('performed_on', { ascending: false })
           .order('created_at', { ascending: false })
           .limit(400),
+        supabase
+          .from('profiles')
+          .select('progress_messages_seen_signature')
+          .eq('id', userId)
+          .maybeSingle(),
       ])
 
       const firstError = exerciseRes.error ?? routineItemRes.error ?? logRes.error
-      if (firstError) return
+      if (firstError) {
+        setHasUnreadMessages(false)
+        return
+      }
 
       const items = buildProgressMessages(
         (exerciseRes.data ?? []) as Exercise[],
@@ -53,15 +54,25 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         (logRes.data ?? []) as unknown as LogWithSession[]
       )
       const signature = progressMessageSignature(items)
-      const seen = String(user.user_metadata?.progress_messages_seen_signature ?? '')
+      let seen = profileRes.error
+        ? ''
+        : String(profileRes.data?.progress_messages_seen_signature ?? '')
 
-      setCurrentMessageSignature(signature)
-      setSeenMessageSignature(seen)
+      if (pathname === '/messages' && signature && signature !== seen && !profileRes.error) {
+        const { error: updateError } = await supabase
+          .from('profiles')
+          .update({ progress_messages_seen_signature: signature })
+          .eq('id', userId)
+
+        if (!updateError) seen = signature
+      }
+
       setHasUnreadMessages(Boolean(signature) && signature !== seen && pathname !== '/messages')
     } catch {
+      // The shell must never take down the app just because the inbox check failed.
       setHasUnreadMessages(false)
     }
-  }, [pathname, supabase])
+  }, [pathname, supabase, userId])
 
   useEffect(() => {
     void loadMessageState()
@@ -73,30 +84,21 @@ export function AppShell({ children }: { children: React.ReactNode }) {
     loadMessageState
   )
 
+  // Keep the read/unread state in sync across open devices without touching auth metadata.
   useEffect(() => {
-    if (pathname !== '/messages' || !currentMessageSignature || currentMessageSignature === seenMessageSignature) return
+    const channel = supabase
+      .channel(`progress-inbox-profile-${userId}`)
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'profiles', filter: `id=eq.${userId}` },
+        () => { void loadMessageState() }
+      )
+      .subscribe()
 
-    let cancelled = false
-    const markRead = async () => {
-      const { data, error } = await supabase.auth.getUser()
-      if (error || !data.user || cancelled) return
-
-      const { error: updateError } = await supabase.auth.updateUser({
-        data: {
-          ...data.user.user_metadata,
-          progress_messages_seen_signature: currentMessageSignature,
-        },
-      })
-
-      if (!updateError && !cancelled) {
-        setSeenMessageSignature(currentMessageSignature)
-        setHasUnreadMessages(false)
-      }
+    return () => {
+      void supabase.removeChannel(channel)
     }
-
-    void markRead()
-    return () => { cancelled = true }
-  }, [currentMessageSignature, pathname, seenMessageSignature, supabase])
+  }, [loadMessageState, supabase, userId])
 
   const navLinks = nav.map(([href, label]) => (
     <Link key={href} href={href} className={pathname === href ? 'active' : ''}>
