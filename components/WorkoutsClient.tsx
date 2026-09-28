@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { getCurrentUser } from '@/lib/user'
 import { ensureStarterData } from '@/lib/seed'
 import type { Exercise, ExerciseLog, ExerciseSet, Routine, RoutineExercise, WorkoutSession } from '@/lib/types'
-import { formatDate, formatKg, progressionRecommendation, todayLocalISO } from '@/lib/metrics'
+import { formatDate, formatKg, getProgressionDecision, progressionRecommendation, todayLocalISO } from '@/lib/metrics'
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh'
 
 type ActiveSession = WorkoutSession & { exercise_logs: ExerciseLog[] }
@@ -658,8 +658,15 @@ function WorkoutExercise({ log, target, previous, onSave, onUpdate, onDelete }: 
   const repMin = target?.rep_min ?? exercise?.rep_min ?? 1
   const repMax = target?.rep_max ?? exercise?.rep_max ?? repMin
   const targetSets = target?.target_sets ?? 3
+  const progressionSettings = { rep_min: repMin, rep_max: repMax, increment_kg: exercise?.increment_kg ?? 0 }
   const lastSets = previous?.exercise_sets ?? []
-  const suggestedWeight = lastSets.length ? Number(lastSets[0].weight_kg) : 0
+  const previousDecision = getProgressionDecision(progressionSettings, previous, targetSets)
+  const suggestedWeight = previousDecision.status === 'increase' && previousDecision.nextWeight !== null
+    ? previousDecision.nextWeight
+    : (lastSets.length ? Number(lastSets[0].weight_kg) : 0)
+  const currentDecision = getProgressionDecision(progressionSettings, log, targetSets)
+  const progressionWasCleared = useRef(currentDecision.status === 'increase')
+  const [progressionPop, setProgressionPop] = useState(false)
   const [weight, setWeight] = useState(suggestedWeight ? String(suggestedWeight) : '')
   const [reps, setReps] = useState('')
   const [saving, setSaving] = useState(false)
@@ -667,6 +674,12 @@ function WorkoutExercise({ log, target, previous, onSave, onUpdate, onDelete }: 
   useEffect(() => {
     if (!weight && suggestedWeight) setWeight(String(suggestedWeight))
   }, [suggestedWeight, weight])
+
+  useEffect(() => {
+    const clearedNow = currentDecision.status === 'increase'
+    if (clearedNow && !progressionWasCleared.current) setProgressionPop(true)
+    progressionWasCleared.current = clearedNow
+  }, [currentDecision.status])
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -677,8 +690,6 @@ function WorkoutExercise({ log, target, previous, onSave, onUpdate, onDelete }: 
     setSaving(false)
     setReps('')
   }
-
-  const progressionSettings = { rep_min: repMin, rep_max: repMax, increment_kg: exercise?.increment_kg ?? 0 }
 
   return (
     <div className="card stack">
@@ -693,8 +704,21 @@ function WorkoutExercise({ log, target, previous, onSave, onUpdate, onDelete }: 
       <div className="card-soft">
         <div className="eyebrow">Last time</div>
         <div style={{marginTop:6}}>{lastSets.length ? lastSets.map((s) => `${formatKg(Number(s.weight_kg)).replace(' kg','')}×${s.reps}`).join(' · ') : 'No previous session'}</div>
-        {previous && <div className="muted" style={{fontSize:12,marginTop:5}}>{progressionRecommendation(progressionSettings, previous)}</div>}
+        {previous && <div className={`progression-guidance ${previousDecision.status === 'increase' ? 'progression-guidance-ready' : ''}`} style={{fontSize:12,marginTop:7}}>{progressionRecommendation(progressionSettings, previous, targetSets)}</div>}
       </div>
+
+      {currentDecision.status === 'increase' && (
+        <div className="progression-ready-card">
+          <div>
+            <div className="eyebrow">Progression unlocked</div>
+            <strong>Increase next session</strong>
+            <div className="muted" style={{marginTop:4}}>{currentDecision.message}</div>
+          </div>
+          {currentDecision.nextWeight !== null && currentDecision.incrementKg > 0 && (
+            <div className="progression-next-load">{formatKg(currentDecision.nextWeight)}</div>
+          )}
+        </div>
+      )}
 
       {!!log.exercise_sets?.length && (
         <div className="stack" style={{gap:7}}>
@@ -710,6 +734,31 @@ function WorkoutExercise({ log, target, previous, onSave, onUpdate, onDelete }: 
         <label>Reps<input required type="number" min="1" max="200" value={reps} onChange={(e) => setReps(e.target.value)} /></label>
         <button className="btn btn-primary set-action" disabled={saving}>{saving ? 'Saving…' : 'Save set'}</button>
       </form>
+
+      {progressionPop && (
+        <div className="progression-modal-backdrop" role="presentation" onMouseDown={() => setProgressionPop(false)}>
+          <div className="progression-modal" role="dialog" aria-modal="true" aria-labelledby={`progression-${log.id}`} onMouseDown={(event) => event.stopPropagation()}>
+            <div className="progression-pop-icon">↑</div>
+            <div className="eyebrow">Progression unlocked</div>
+            <h3 id={`progression-${log.id}`}>{exercise?.name ?? 'Exercise'} — increase next session</h3>
+            <p>
+              You hit at least <strong>{repMax} reps</strong> on all <strong>{targetSets} working sets</strong>
+              {currentDecision.workingWeight !== null ? <> at <strong>{formatKg(currentDecision.workingWeight)}</strong></> : null}.
+            </p>
+            {currentDecision.nextWeight !== null && currentDecision.incrementKg > 0 ? (
+              <div className="progression-pop-load">
+                <span>Next working weight</span>
+                <strong>{formatKg(currentDecision.nextWeight)}</strong>
+                <small>+{formatKg(currentDecision.incrementKg)}</small>
+              </div>
+            ) : (
+              <div className="notice">Target cleared. Add a load-increase value in Exercise settings so the app can calculate the next weight.</div>
+            )}
+            <p className="muted">Next time, move the load up and work back through the {repMin}–{repMax} rep range.</p>
+            <button type="button" className="btn btn-primary" onClick={() => setProgressionPop(false)}>Got it</button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

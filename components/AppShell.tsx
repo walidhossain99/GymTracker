@@ -8,6 +8,7 @@ const nav = [
   ['/workouts', 'Workouts'],
   ['/bodyweight', 'Bodyweight'],
   ['/exercises', 'Exercises'],
+  ['/messages', 'Messages'],
   ['/analytics', 'Analytics'],
 ] as const
 
