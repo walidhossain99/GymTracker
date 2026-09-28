@@ -3,61 +3,125 @@
 import Link from 'next/link'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
-import { formatDate, formatKg } from '@/lib/metrics'
-import { buildProgressMessages } from '@/lib/progressInbox'
+import { getCurrentUser } from '@/lib/user'
+import { formatDate, formatKg, getProgressionDecision } from '@/lib/metrics'
 import { useRealtimeRefresh } from '@/hooks/useRealtimeRefresh'
-import type { Exercise, RoutineExercise } from '@/lib/types'
-import type { LogWithSession, ProgressMessageItem } from '@/lib/progressInbox'
+import type { Exercise, ExerciseLog, RoutineExercise } from '@/lib/types'
 
-export function ProgressMessagesClient({ userId }: { userId: string }) {
+type LogWithSession = ExerciseLog & {
+  workout_sessions?: { routine_id: string | null; session_date: string } | null
+}
+
+type ProgressMessage = {
+  exercise: Exercise
+  log: LogWithSession
+  routineItem?: RoutineExercise
+  status: 'increase' | 'add-reps' | 'below-range' | 'mixed-load' | 'incomplete'
+  message: string
+  workingWeight: number | null
+  nextWeight: number | null
+  targetSets: number
+  repMin: number
+  repMax: number
+}
+
+export function ProgressMessagesClient() {
   const supabase = useMemo(() => createClient(), [])
-  const [items, setItems] = useState<ProgressMessageItem[]>([])
+  const [userId, setUserId] = useState<string | null>(null)
+  const [items, setItems] = useState<ProgressMessage[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   const load = useCallback(async () => {
     setLoading(true)
     setError('')
+    const user = await getCurrentUser(supabase)
+    setUserId(user.id)
 
-    try {
-      const [exerciseRes, routineItemRes, logRes] = await Promise.all([
-        supabase.from('exercises').select('*').eq('user_id', userId).order('name'),
-        supabase.from('routine_exercises').select('*').eq('user_id', userId),
-        supabase
-          .from('exercise_logs')
-          .select('*, exercise_sets(*), workout_sessions(routine_id, session_date)')
-          .eq('user_id', userId)
-          .order('performed_on', { ascending: false })
-          .order('created_at', { ascending: false })
-          .limit(400),
-      ])
+    const [exerciseRes, routineItemRes, logRes] = await Promise.all([
+      supabase.from('exercises').select('*').eq('user_id', user.id).order('name'),
+      supabase.from('routine_exercises').select('*').eq('user_id', user.id),
+      supabase
+        .from('exercise_logs')
+        .select('*, exercise_sets(*), workout_sessions(routine_id, session_date)')
+        .eq('user_id', user.id)
+        .order('performed_on', { ascending: false })
+        .order('created_at', { ascending: false })
+        .limit(400),
+    ])
 
-      const firstError = exerciseRes.error ?? routineItemRes.error ?? logRes.error
-      if (firstError) {
-        setError(firstError.message)
-        setLoading(false)
-        return
-      }
-
-      setItems(buildProgressMessages(
-        (exerciseRes.data ?? []) as Exercise[],
-        (routineItemRes.data ?? []) as RoutineExercise[],
-        (logRes.data ?? []) as unknown as LogWithSession[]
-      ))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Could not load progression messages.')
-    } finally {
+    const firstError = exerciseRes.error ?? routineItemRes.error ?? logRes.error
+    if (firstError) {
+      setError(firstError.message)
       setLoading(false)
+      return
     }
-  }, [supabase, userId])
 
-  useEffect(() => { void load() }, [load])
+    const exercises = (exerciseRes.data ?? []) as Exercise[]
+    const routineItems = (routineItemRes.data ?? []) as RoutineExercise[]
+    const logs = ((logRes.data ?? []) as unknown as LogWithSession[]).map((log) => ({
+      ...log,
+      exercise_sets: [...(log.exercise_sets ?? [])].sort((a, b) => a.set_number - b.set_number),
+    }))
+
+    const latestWithSets = new Map<string, LogWithSession>()
+    for (const log of logs) {
+      if ((log.exercise_sets?.length ?? 0) === 0) continue
+      if (!latestWithSets.has(log.exercise_id)) latestWithSets.set(log.exercise_id, log)
+    }
+
+    const nextItems: ProgressMessage[] = []
+    for (const exercise of exercises) {
+      const log = latestWithSets.get(exercise.id)
+      if (!log) continue
+
+      const routineId = log.workout_sessions?.routine_id ?? null
+      const routineItem = routineId
+        ? routineItems.find((item) => item.routine_id === routineId && item.exercise_id === exercise.id)
+        : undefined
+
+      const repMin = routineItem?.rep_min ?? exercise.rep_min
+      const repMax = routineItem?.rep_max ?? exercise.rep_max
+      const targetSets = routineItem?.target_sets ?? Math.max(1, log.exercise_sets?.length ?? 1)
+      const decision = getProgressionDecision(
+        { rep_min: repMin, rep_max: repMax, increment_kg: exercise.increment_kg },
+        log,
+        targetSets
+      )
+
+      if (decision.status === 'no-data') continue
+      nextItems.push({
+        exercise,
+        log,
+        routineItem,
+        status: decision.status,
+        message: decision.message,
+        workingWeight: decision.workingWeight,
+        nextWeight: decision.nextWeight,
+        targetSets,
+        repMin,
+        repMax,
+      })
+    }
+
+    nextItems.sort((a, b) => {
+      const readyA = a.status === 'increase' ? 1 : 0
+      const readyB = b.status === 'increase' ? 1 : 0
+      if (readyA !== readyB) return readyB - readyA
+      return b.log.performed_on.localeCompare(a.log.performed_on)
+    })
+
+    setItems(nextItems)
+    setLoading(false)
+  }, [supabase])
+
+  useEffect(() => { load() }, [load])
   useRealtimeRefresh(userId, ['exercises', 'routine_exercises', 'workout_sessions', 'exercise_logs', 'exercise_sets'], load)
 
   const ready = items.filter((item) => item.status === 'increase' && item.nextWeight !== null)
   const building = items.filter((item) => item.status !== 'increase')
 
-  function repsLine(item: ProgressMessageItem) {
+  function repsLine(item: ProgressMessage) {
     const sets = [...(item.log.exercise_sets ?? [])]
       .sort((a, b) => a.set_number - b.set_number)
       .slice(0, item.targetSets)
@@ -117,8 +181,8 @@ export function ProgressMessagesClient({ userId }: { userId: string }) {
                     <div className="muted" style={{ fontSize: 13 }}>{item.exercise.muscle_group ?? 'Exercise'} · Last logged {formatDate(item.log.performed_on)}</div>
                   </div>
                   <div className="progress-message-load">
-                    <span className="progress-message-load-label">Next load</span>
-                    <strong className="progress-message-load-value">{item.nextWeight !== null ? formatKg(item.nextWeight) : '—'}</strong>
+                    <span>Next load</span>
+                    <strong>{item.nextWeight !== null ? formatKg(item.nextWeight) : '—'}</strong>
                   </div>
                 </div>
 
@@ -161,8 +225,8 @@ export function ProgressMessagesClient({ userId }: { userId: string }) {
                   </div>
                   {item.workingWeight !== null && (
                     <div className="progress-message-load progress-message-load-muted">
-                      <span className="progress-message-load-label">Current load</span>
-                      <strong className="progress-message-load-value">{formatKg(item.workingWeight)}</strong>
+                      <span>Current load</span>
+                      <strong>{formatKg(item.workingWeight)}</strong>
                     </div>
                   )}
                 </div>
@@ -175,7 +239,7 @@ export function ProgressMessagesClient({ userId }: { userId: string }) {
       )}
 
       <div className="notice" style={{ marginTop: 18 }}>
-        Opening Messages marks the current progression updates as read. If your latest workout changes a recommendation later, the unread dot returns automatically.
+        You do not need to manually clear these messages. Once you log the next session, the inbox recalculates from your newest working sets and updates the recommendation automatically.
       </div>
     </div>
   )
