@@ -182,3 +182,152 @@ th { color: var(--muted); font-weight: 700; }
     flex: 1 1 auto;
   }
 }
+
+/* v1.4 — historical weigh-ins can be corrected in place */
+.bodyweight-row-actions { flex-wrap: wrap; }
+.bodyweight-edit-row input { min-width: 120px; }
+.bodyweight-edit-row td { vertical-align: middle; }
+@media (max-width: 720px) {
+  .bodyweight-row-actions { min-width: 180px; }
+}
+
+/* v1.5 — double-progression alerts and next-session load guidance */
+.progression-guidance { color: var(--muted); }
+.progression-guidance-ready { color: var(--success); font-weight: 750; }
+.progression-ready-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid rgba(124,247,165,.34);
+  background: rgba(124,247,165,.075);
+  border-radius: 14px;
+  padding: 14px;
+}
+.progression-ready-card strong { display:block; margin-top:4px; font-size:16px; }
+.progression-next-load {
+  flex: 0 0 auto;
+  border: 1px solid rgba(124,247,165,.3);
+  background: rgba(124,247,165,.10);
+  color: var(--success);
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-size: 20px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+.progression-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(2, 5, 9, .78);
+  backdrop-filter: blur(5px);
+}
+.progression-modal {
+  width: min(520px, 100%);
+  border: 1px solid rgba(124,247,165,.35);
+  border-radius: 20px;
+  background: #11161e;
+  padding: 22px;
+  box-shadow: 0 24px 80px rgba(0,0,0,.5);
+}
+.progression-modal h3 { margin: 8px 0 10px; font-size: 24px; line-height: 1.15; }
+.progression-modal p { line-height: 1.55; }
+.progression-pop-icon {
+  display: grid;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  margin-bottom: 14px;
+  border-radius: 16px;
+  background: var(--accent);
+  color: #061008;
+  font-size: 29px;
+  font-weight: 950;
+}
+.progression-pop-load {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: end;
+  gap: 2px 14px;
+  margin: 16px 0;
+  padding: 14px;
+  border: 1px solid rgba(124,247,165,.3);
+  border-radius: 14px;
+  background: rgba(124,247,165,.07);
+}
+.progression-pop-load span { color: var(--muted); font-size: 13px; }
+.progression-pop-load strong { grid-row: span 2; font-size: 28px; color: var(--success); }
+.progression-pop-load small { color: var(--success); font-weight: 800; }
+@media (max-width: 620px) {
+  .progression-ready-card { align-items: flex-start; flex-direction: column; }
+  .progression-next-load { width: 100%; text-align: center; }
+  .progression-modal { padding: 18px; }
+  .progression-pop-load { grid-template-columns: 1fr; }
+  .progression-pop-load strong { grid-row: auto; margin-top: 3px; }
+}
+
+/* v1.6 — persistent progression message center */
+.progress-message-grid { display:grid; gap:14px; }
+.progress-message-card h3 { margin:10px 0 4px; font-size:20px; }
+.progress-message-card { display:grid; gap:14px; }
+.progress-message-ready { border-color:rgba(124,247,165,.30); background:linear-gradient(135deg, rgba(124,247,165,.055), rgba(17,22,30,.92) 42%); }
+.progress-message-top { align-items:flex-start; }
+.progress-message-load { flex:0 0 auto; min-width:150px; border:1px solid rgba(124,247,165,.30); border-radius:14px; background:rgba(124,247,165,.08); padding:10px 13px; text-align:right; }
+.progress-message-load span { display:block; color:var(--muted); font-size:12px; }
+.progress-message-load strong { display:block; margin-top:2px; color:var(--success); font-size:23px; }
+.progress-message-load-muted { border-color:var(--border); background:var(--panel-2); }
+.progress-message-load-muted strong { color:var(--text); }
+.progress-message-detail-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.progress-message-detail-grid .card-soft { display:grid; gap:5px; }
+.progress-message-detail-grid strong { font-size:17px; }
+.progress-message-text { margin:0; color:#dce3eb; line-height:1.55; }
+@media (max-width: 720px) {
+  .progress-message-top { align-items:stretch; flex-direction:column; }
+  .progress-message-load { width:100%; text-align:left; }
+  .progress-message-detail-grid { grid-template-columns:1fr; }
+}
+
+/* v1.7 — cleaner message load card + unread progression indicator */
+.nav-item-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.message-unread-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  flex: 0 0 8px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px rgba(124,247,165,.08), 0 0 12px rgba(124,247,165,.55);
+}
+.progress-message-load {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 5px;
+  min-width: 164px;
+  padding: 12px 15px;
+}
+.progress-message-load-label {
+  display: block;
+  line-height: 1.1;
+  letter-spacing: .02em;
+}
+.progress-message-load-value {
+  display: block;
+  margin-top: 0;
+  line-height: 1.05;
+}
+@media (max-width: 720px) {
+  .progress-message-load {
+    align-items: flex-start;
+    text-align: left;
+  }
+}
