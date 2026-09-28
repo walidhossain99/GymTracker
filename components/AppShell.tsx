@@ -8,7 +8,6 @@ const nav = [
   ['/workouts', 'Workouts'],
   ['/bodyweight', 'Bodyweight'],
   ['/exercises', 'Exercises'],
-  ['/messages', 'Messages'],
   ['/analytics', 'Analytics'],
 ] as const
 
@@ -17,7 +16,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
 
   const navLinks = nav.map(([href, label]) => (
     <Link key={href} href={href} className={pathname === href ? 'active' : ''}>
-      {label}
+      <span className="nav-item-label">{label}</span>
     </Link>
   ))
 

@@ -9,5 +9,5 @@ export default async function ProtectedLayout({ children }: { children: React.Re
   const { data, error } = await supabase.auth.getClaims()
   if (error || !data?.claims?.sub) redirect('/login')
 
-  return <AppShell userId={String(data.claims.sub)}>{children}</AppShell>
+  return <AppShell>{children}</AppShell>
 }

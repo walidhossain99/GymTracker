@@ -1,5 +1,5 @@
-import { ProgressMessagesClient } from '@/components/ProgressMessagesClient'
+import { redirect } from 'next/navigation'
 
 export default function MessagesPage() {
-  return <ProgressMessagesClient />
+  redirect('/workouts')
 }
