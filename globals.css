@@ -269,3 +269,24 @@ th { color: var(--muted); font-weight: 700; }
   .progression-pop-load { grid-template-columns: 1fr; }
   .progression-pop-load strong { grid-row: auto; margin-top: 3px; }
 }
+
+/* v1.6 — persistent progression message center */
+.progress-message-grid { display:grid; gap:14px; }
+.progress-message-card h3 { margin:10px 0 4px; font-size:20px; }
+.progress-message-card { display:grid; gap:14px; }
+.progress-message-ready { border-color:rgba(124,247,165,.30); background:linear-gradient(135deg, rgba(124,247,165,.055), rgba(17,22,30,.92) 42%); }
+.progress-message-top { align-items:flex-start; }
+.progress-message-load { flex:0 0 auto; min-width:150px; border:1px solid rgba(124,247,165,.30); border-radius:14px; background:rgba(124,247,165,.08); padding:10px 13px; text-align:right; }
+.progress-message-load span { display:block; color:var(--muted); font-size:12px; }
+.progress-message-load strong { display:block; margin-top:2px; color:var(--success); font-size:23px; }
+.progress-message-load-muted { border-color:var(--border); background:var(--panel-2); }
+.progress-message-load-muted strong { color:var(--text); }
+.progress-message-detail-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.progress-message-detail-grid .card-soft { display:grid; gap:5px; }
+.progress-message-detail-grid strong { font-size:17px; }
+.progress-message-text { margin:0; color:#dce3eb; line-height:1.55; }
+@media (max-width: 720px) {
+  .progress-message-top { align-items:stretch; flex-direction:column; }
+  .progress-message-load { width:100%; text-align:left; }
+  .progress-message-detail-grid { grid-template-columns:1fr; }
+}
